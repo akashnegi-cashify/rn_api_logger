@@ -21,6 +21,7 @@ Before any edits, verify the target project meets these requirements. If anythin
 |---|---|---|
 | Is React Native ≥ 0.70 | Read `package.json` → `dependencies."react-native"` | Stop. Plugin requires modern RN. |
 | Has `react-native-safe-area-context` | Read `package.json` → check dep | Add it: `"react-native-safe-area-context": "^4.0.0"` |
+| Has `@react-native-clipboard/clipboard` | Read `package.json` → check dep | Add it: `"@react-native-clipboard/clipboard": "^1.11.0"` |
 | iOS AppDelegate is Swift | Look for `ios/<AppName>/AppDelegate.swift` | Stop. This skill only handles Swift AppDelegate. Ask the user. |
 | Android `MainApplication.kt` exists | Look for `android/app/src/main/.../MainApplication.kt` | Stop. Plugin requires Kotlin MainApplication, not Java. Ask. |
 | `@reglobe/lego-core` is a dependency | Read `package.json` → `dependencies."@reglobe/lego-core"` | If present, **Step 1.5 is mandatory** — add the autolinking exclusion before running any install. |
@@ -44,6 +45,8 @@ Edit the target project's root `package.json`. Add inside `"dependencies"`:
 ```
 
 Also verify `"react-native-safe-area-context": "^4.0.0"` (or later) is present. If missing, add it.
+
+Also verify `"@react-native-clipboard/clipboard": "^1.11.0"` (or later) is present. If missing, add it. The debug screen imports it directly for its per-section Copy actions, so the screen will throw at import time if it is absent. It is a native module, so adding it requires a pod install and a rebuild (Step 6).
 
 **Do NOT add `"codegenConfig"` anywhere referencing this plugin.** It is a legacy paper module — codegen will break the build (`react_codegen_RNLegoApiLogger` CMake target missing).
 
@@ -365,6 +368,8 @@ If the project uses npm instead of yarn, swap `yarn install` for `npm install`. 
 
 > The plugin uses RN autolinking. There are no manual `Podfile` edits or `settings.gradle` includes required.
 
+> If `@react-native-clipboard/clipboard` was added in Step 1, these same steps link it — it is a native module, so a JS reload alone is not enough. A full rebuild is required or the debug screen will fail to import.
+
 ---
 
 ## Step 7 — Verify
@@ -398,6 +403,7 @@ Tell the user:
 | Android module loads but captures nothing | `LegoAPILoggerInterceptor` not added to OkHttp builder | Verify `initHttpClient()` is called from `onCreate()` BEFORE `loadReactNative(this)`. |
 | `LegoApiLogger.enable()` runs but nothing logs on Android | The host project uses a custom OkHttp client that doesn't go through `OkHttpClientProvider` | Manually attach `LegoAPILoggerInterceptor()` to that custom builder too. |
 | `Header.tsx` typing error: `Routes.API_LOGGER` doesn't exist | The project has no centralized `Routes` constant | Use the string literal `'ApiLogger'` directly instead. |
+| Screen crashes on open with `Cannot find module '@react-native-clipboard/clipboard'`, or `Clipboard.setString is not a function` | The clipboard peer dependency is missing, or it was installed without a native rebuild | Add `"@react-native-clipboard/clipboard": "^1.11.0"` to `dependencies`, then `yarn install`, `cd ios && pod install`, and rebuild the app. A Metro reload alone will not link a native module. |
 
 ---
 
