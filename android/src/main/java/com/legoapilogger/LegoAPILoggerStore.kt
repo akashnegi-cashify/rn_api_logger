@@ -8,19 +8,55 @@ import java.net.URL
 import java.util.regex.Pattern
 
 object LegoAPILoggerStore {
-    private val logs = mutableListOf<HashMap<String, Any?>>()
+    /**
+     * Newest-last ring of captured logs.
+     *
+     * Every access must hold [logsLock]: `addLog` runs on OkHttp's dispatcher
+     * threads (many at once), while `getLogs` / `clearLogs` run on the React
+     * Native bridge thread. An unsynchronized list corrupts its size/backing
+     * array under that access pattern and throws ArrayIndexOutOfBoundsException.
+     */
+    private val logs = ArrayDeque<HashMap<String, Any?>>()
+    private val logsLock = Any()
+
+    /**
+     * Cap on retained logs. Each entry holds a full response body, so an
+     * uncapped list is an unbounded memory leak on a long-running session.
+     * Matches the cap the JS screen already applies to its live feed.
+     */
+    private const val MAX_LOGS = 500
 
     internal var domainRegexes: List<Pattern>? = null
     internal var pathRegexes: List<Pattern>? = null
 
+    @Volatile
     var eventEmitter: ((WritableMap) -> Unit)? = null
 
+    @Volatile
     internal var loggingEnabled: Boolean = false
 
     fun addLog(log: WritableMap) {
         val snapshot = log.toHashMap()
-        logs.add(snapshot)
-        eventEmitter?.invoke(log)
+        synchronized(logsLock) {
+            logs.addLast(snapshot)
+            // Trim from the front so the newest entries survive.
+            while (logs.size > MAX_LOGS) {
+                logs.removeFirst()
+            }
+        }
+        // Emit outside the lock: the callback hops to the bridge and must not
+        // block other interceptor threads from recording. Read into a local so
+        // a concurrent `eventEmitter = null` can't null it between check and call.
+        val emit = eventEmitter
+        if (emit != null) {
+            try {
+                emit(log)
+            } catch (e: Exception) {
+                // A listener that throws must not kill the OkHttp dispatcher
+                // thread and, with it, the host app's request.
+                Log.e("RNLegoApp", "LegoAPILoggerStore::addLog emit failed: ${e.localizedMessage}")
+            }
+        }
     }
 
     fun isValidRequest(requestUrl: String): Boolean {
@@ -49,12 +85,18 @@ object LegoAPILoggerStore {
 
     fun clearLogs() {
         Log.d("RNLegoApp", "LegoAPILoggerStore::clearLogs")
-        logs.clear()
+        synchronized(logsLock) {
+            logs.clear()
+        }
     }
 
     fun getLogs(): WritableArray {
+        // Copy under the lock, then convert outside it: iterating the live list
+        // while an interceptor thread appends throws ConcurrentModification,
+        // and the conversion itself is slow enough to stall request logging.
+        val snapshots = synchronized(logsLock) { logs.toList() }
         return Arguments.createArray().apply {
-            logs.forEach { snapshot ->
+            snapshots.forEach { snapshot ->
                 pushMap(toWritableMap(snapshot))
             }
         }
